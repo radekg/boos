@@ -36,10 +36,10 @@ func GetReader(reader io.Reader, logger hclog.Logger) (SamplingReader, error) {
 	switch mediaVideoType {
 	case uint32(MediaVideoTypeH264):
 		logger.Info("reading video data from source", "format", "h264")
-		return newH264SamplingReader(reader, logger)
+		return newH264SamplingReader(reader, logger.Named("h264"))
 	case uint32(MediaVideoTypeVP8):
 		logger.Info("reading video data from source", "format", "vp8")
-		return newVP8SamplingReader(reader)
+		return newVP8SamplingReader(reader, logger.Named("vp8"))
 	default:
 		return nil, fmt.Errorf("Unknown media video type")
 	}
@@ -66,7 +66,6 @@ func (impl *h264SamplingReader) NextSample() (SampleWithTimingHint, error) {
 		}
 		return SampleWithTimingHint{}, nalErr
 	}
-	impl.l.Info("Delivering NAL", "length", len(nal.Data))
 	return SampleWithTimingHint{
 		Sample: media.Sample{
 			Data:     nal.Data,
@@ -76,17 +75,18 @@ func (impl *h264SamplingReader) NextSample() (SampleWithTimingHint, error) {
 	}, nil
 }
 
-func newVP8SamplingReader(source io.Reader) (SamplingReader, error) {
+func newVP8SamplingReader(source io.Reader, logger hclog.Logger) (SamplingReader, error) {
 	r, h, err := ivfreader.NewWith(source)
 	if err != nil {
 		return nil, fmt.Errorf("Failed creating new VP8 reader: %v", err)
 	}
-	return &vp8SamplingReader{r: r, h: h}, nil
+	return &vp8SamplingReader{r: r, h: h, l: logger}, nil
 }
 
 type vp8SamplingReader struct {
 	r      *ivfreader.IVFReader
 	h      *ivfreader.IVFFileHeader
+	l      hclog.Logger
 	lastTs uint64
 }
 
