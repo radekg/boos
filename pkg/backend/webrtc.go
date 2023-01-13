@@ -119,10 +119,10 @@ func (svc *WebRTCService) CreateRecordingConnection(client *PeerClient) error {
 
 	// Allow us to receive 1 audio track, and 1 video track
 	if _, err = client.pc.AddTransceiverFromKind(webrtc.RTPCodecTypeAudio); err != nil {
-		svc.logger.Error("Failed adding transciever from audio kind", "reason", err)
+		svc.logger.Error("Failed adding transceiver from audio kind", "reason", err)
 		return err
 	} else if _, err = client.pc.AddTransceiverFromKind(webrtc.RTPCodecTypeVideo); err != nil {
-		svc.logger.Error("Failed adding transciever from video kind", "reason", err)
+		svc.logger.Error("Failed adding transceiver from video kind", "reason", err)
 		return err
 	}
 
@@ -193,6 +193,15 @@ func (svc *WebRTCService) CreatePlaybackConnection(client *PeerClient) error {
 	svc.recordingsLock.Lock()
 	defer svc.recordingsLock.Unlock()
 
+	// Allow us to receive 1 audio track, and 1 video track
+	if _, err = client.pc.AddTransceiverFromKind(webrtc.RTPCodecTypeAudio); err != nil {
+		svc.logger.Error("Failed adding transceiver from audio kind", "reason", err)
+		return err
+	} else if _, err = client.pc.AddTransceiverFromKind(webrtc.RTPCodecTypeVideo); err != nil {
+		svc.logger.Error("Failed adding transceiver from video kind", "reason", err)
+		return err
+	}
+
 	iceConnectedCtx, iceConnectedCtxCancel := context.WithCancel(context.Background())
 
 	for id, avr := range svc.recordings {
@@ -204,7 +213,7 @@ func (svc *WebRTCService) CreatePlaybackConnection(client *PeerClient) error {
 			svc.logger.Info("I have an AV data", "data-id", id, "video-length", avr.video.Len())
 
 			// Create a video track
-			videoTrack, videoTrackErr := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeVP8}, "video", "pion")
+			videoTrack, videoTrackErr := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264}, "video", "pion")
 			if videoTrackErr != nil {
 				panic(videoTrackErr)
 			}

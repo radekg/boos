@@ -211,23 +211,27 @@ func (c *PeerClient) startServerSession() error {
 				return err
 			}
 	*/
+
 	// ---
 
 	// Set the remote session description
 	err = c.pc.SetRemoteDescription(offer)
 	if err != nil {
+		c.logger.Error("Failed setting remote description", "reason", err)
 		return err
 	}
 
 	// Create answer
 	answer, err := c.pc.CreateAnswer(nil)
 	if err != nil {
+		c.logger.Error("Failed creating an answer", "reason", err)
 		return err
 	}
 
 	// Starts the UDP listeners
 	err = c.pc.SetLocalDescription(answer)
 	if err != nil {
+		c.logger.Error("Failed setting local description", "reason", err)
 		return err
 	}
 
