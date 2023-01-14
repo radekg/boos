@@ -70,27 +70,27 @@ func VideoCodecs() []webrtc.RTPCodecParameters {
 				},
 				PayloadType: 127,
 			},
-
-			{
-				RTPCodecCapability: webrtc.RTPCodecCapability{
-					MimeType:     webrtc.MimeTypeH264,
-					ClockRate:    90000,
-					Channels:     0,
-					SDPFmtpLine:  "profile-level-id=42e01f;level-asymmetry-allowed=1;packetization-mode=1",
-					RTCPFeedback: videoRTCPH264Feedback,
+			/*
+				{
+					RTPCodecCapability: webrtc.RTPCodecCapability{
+						MimeType:     webrtc.MimeTypeH264,
+						ClockRate:    90000,
+						Channels:     0,
+						SDPFmtpLine:  "profile-level-id=42e01f;level-asymmetry-allowed=1;packetization-mode=1",
+						RTCPFeedback: videoRTCPH264Feedback,
+					},
+					PayloadType: 98,
 				},
-				PayloadType: 98,
-			},
-			{
-				RTPCodecCapability: webrtc.RTPCodecCapability{
-					MimeType:     mimeTypeVideoRtx,
-					ClockRate:    90000,
-					Channels:     0,
-					SDPFmtpLine:  "apt=98",
-					RTCPFeedback: nil,
-				},
-				PayloadType: 99,
-			},
+				{
+					RTPCodecCapability: webrtc.RTPCodecCapability{
+						MimeType:     mimeTypeVideoRtx,
+						ClockRate:    90000,
+						Channels:     0,
+						SDPFmtpLine:  "apt=98",
+						RTCPFeedback: nil,
+					},
+					PayloadType: 99,
+				},*/
 		}...)
 	}
 

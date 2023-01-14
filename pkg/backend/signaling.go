@@ -7,6 +7,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/hashicorp/go-hclog"
 	"github.com/radekg/boos/configs"
+	"github.com/radekg/boos/pkg/storage"
 )
 
 // Server implements a WebRTC signal server used to locate and connect up with peers.
@@ -24,7 +25,13 @@ func ServeListen(backEndConfig *configs.BackendConfig,
 	webRTCConfig *configs.WebRTCConfig,
 	logger hclog.Logger) error {
 
-	services, err := CreateNewWebRTCService(webRTCConfig, logger.Named("webrtc"))
+	stImpl, err := storage.GetStorage(backEndConfig.StorageType, map[string]interface{}{}, logger.Named("storage"))
+	if err != nil {
+		logger.Error("Failed creating storage service", "reason", err)
+		return err
+	}
+
+	services, err := CreateNewWebRTCService(webRTCConfig, stImpl, logger.Named("webrtc"))
 	if err != nil {
 		logger.Error("Failed creating WebRTC service", "reason", err)
 		return err

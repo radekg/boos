@@ -1,7 +1,6 @@
 package backend
 
 import (
-	"bytes"
 	"fmt"
 	"sync"
 
@@ -10,12 +9,6 @@ import (
 	"github.com/hashicorp/go-hclog"
 	"github.com/pion/sdp/v2"
 	"github.com/pion/webrtc/v3"
-	"github.com/pion/webrtc/v3/pkg/media"
-	"github.com/pion/webrtc/v3/pkg/media/h264writer"
-	"github.com/pion/webrtc/v3/pkg/media/oggwriter"
-
-	"github.com/radekg/boos/pkg/media/ivfwriter"
-	"github.com/radekg/boos/pkg/media/video"
 )
 
 // PeerClientType represents the types of signal messages
@@ -35,7 +28,9 @@ const (
 // PeerClient represents a server-side client used as a peer to the browser client.
 type PeerClient struct {
 	id string
-	ct PeerClientType
+
+	decidedType PeerClientType
+
 	pc *webrtc.PeerConnection
 	ws *websocket.Conn
 
@@ -45,9 +40,6 @@ type PeerClient struct {
 	sdParsed sdp.SessionDescription
 
 	services *WebRTCService
-
-	audioBuf *bytes.Buffer
-	videoBuf *bytes.Buffer
 
 	logger hclog.Logger
 
@@ -61,42 +53,46 @@ type PeerClient struct {
 func CreateNewPeerClient(conn *websocket.Conn, services *WebRTCService, logger hclog.Logger) (*PeerClient, error) {
 	clientID := guuid.New().String()
 	client := PeerClient{
-		id:       clientID,
-		ct:       PctUndecided,
-		ws:       conn,
-		closeCh:  make(chan struct{}),
-		audioBuf: bytes.NewBuffer([]byte{}),
-		videoBuf: bytes.NewBuffer([]byte{}),
-		logger:   logger.Named(fmt.Sprintf("peer-%s", clientID)).With("client-id", clientID),
-		services: services,
+		id:          clientID,
+		decidedType: PctUndecided,
+		ws:          conn,
+		logger:      logger.Named(fmt.Sprintf("peer-%s", clientID)).With("client-id", clientID),
+		services:    services,
+		closeCh:     make(chan struct{}),
 	}
 	client.logger.Info("Server Peer Client created")
 	go client.eventLoop()
 	return &client, nil
 }
 
+// IsClosed checks to see if this client has been shutdown
+func (c *PeerClient) closed() bool {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	select {
+	case _, ok := <-c.closeCh:
+		if !ok {
+			return true
+		}
+	default:
+	}
+	return false
+}
+
 // Close - closes a client's peer and signal connections.
 func (c *PeerClient) Close() {
-	if c.IsClosed() {
+	if c.closed() {
 		return
 	}
-
 	c.mutex.Lock()
 	close(c.closeCh)
 	c.mutex.Unlock()
-
 	c.ws.Close()
-
 	if c.pc != nil {
 		c.pc.Close()
 	}
-
 	c.wg.Wait()
-
-	if c.ct == PctRecord {
-		c.services.SaveVideo(c.id, c.videoBuf)
-		c.services.SaveAudio(c.id, c.audioBuf)
-	}
 
 	c.logger.Info("Client closed")
 }
@@ -112,7 +108,7 @@ func (c *PeerClient) eventLoop() {
 	var err error
 
 	for {
-		if c.IsClosed() {
+		if c.closed() {
 			return
 		}
 
@@ -133,11 +129,11 @@ func (c *PeerClient) eventLoop() {
 
 		switch ev.id {
 		case SmRecord:
-			if c.ct != PctUndecided {
+			if c.decidedType != PctUndecided {
 				c.sendError("Peer client is already either recording or playing. Please disconnect and try again.")
 				continue
 			}
-			c.ct = PctRecord
+			c.decidedType = PctRecord
 			c.browserSD = ev.Data
 			go func() {
 				c.wg.Add(1)
@@ -149,15 +145,16 @@ func (c *PeerClient) eventLoop() {
 			}()
 
 		case SmPlay:
-			if c.ct != PctUndecided {
+			if c.decidedType != PctUndecided {
 				c.sendError("Peer client is already either recording or playing. Please disconnect and try again.")
 				continue
 			}
-			if !c.services.HasRecordings() {
-				c.sendError("There are no recorded videos to playback. Please record a video first.")
-				continue
-			}
-			c.ct = PctPlayback
+			// TODO: use configured storage here
+			// if !c.services.HasRecordings() {
+			// 	c.sendError("There are no recorded videos to playback. Please record a video first.")
+			// 	continue
+			// }
+			c.decidedType = PctPlayback
 			c.browserSD = ev.Data
 			go func() {
 				c.wg.Add(1)
@@ -171,19 +168,9 @@ func (c *PeerClient) eventLoop() {
 	}
 }
 
-// IsClosed checks to see if this client has been shutdown
-func (c *PeerClient) IsClosed() bool {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-
-	select {
-	case _, ok := <-c.closeCh:
-		if !ok {
-			return true
-		}
-	default:
-	}
-	return false
+// CloseChan returns a channel that gets closed when this peer client is closed.
+func (c *PeerClient) CloseChan() <-chan struct{} {
+	return c.closeCh
 }
 
 // startServerSession - Completes the session initiation with the client.
@@ -252,52 +239,6 @@ func (c *PeerClient) startServerSession() error {
 	return nil
 }
 
-func (c *PeerClient) recordTrack(writer media.Writer, track *webrtc.TrackRemote) error {
-	defer func() {
-		writer.Close()
-	}()
-	for {
-		if c.IsClosed() {
-			break
-		}
-		rtpPacket, _, err := track.ReadRTP()
-		if err != nil {
-			return err
-		}
-		if err := writer.WriteRTP(rtpPacket); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (c *PeerClient) recordAudioTrackOpus(track *webrtc.TrackRemote) error {
-	w, err := oggwriter.NewWith(c.audioBuf, 48000, 2)
-	if err != nil {
-		return err
-	}
-	return c.recordTrack(w, track)
-}
-
-func (c *PeerClient) recordVideoTrackH264(track *webrtc.TrackRemote) error {
-	// TODO: abstract away at a later stage...
-	c.videoBuf.Reset()
-	c.videoBuf.Write(video.HeaderH264())
-	w := h264writer.NewWith(c.videoBuf)
-	return c.recordTrack(w, track)
-}
-
-func (c *PeerClient) recordVideoTrackVP8(track *webrtc.TrackRemote) error {
-	// TODO: abstract away at a later stage...
-	c.videoBuf.Reset()
-	c.videoBuf.Write(video.HeaderVP8())
-	w, err := ivfwriter.NewWith(c.videoBuf)
-	if err != nil {
-		return err
-	}
-	return c.recordTrack(w, track)
-}
-
 func (c *PeerClient) sendError(errMsg string) error {
 	c.logger.Error("Client reporting error to a peer", "error", errMsg)
 
@@ -313,5 +254,3 @@ func (c *PeerClient) sendError(errMsg string) error {
 
 	return nil
 }
-
-// Okay, no place to stuff media type in right now, let's take a shortcut:
