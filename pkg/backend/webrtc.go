@@ -140,24 +140,29 @@ func (svc *WebRTCService) CreateRecordingConnection(client *PeerClient) error {
 			}
 		}()
 
-		// This whole thing below can be replaced with the storage.Write.
-		// Storage write already does async for each individual track.
-		svc.storage.Write(ctxDone, client.id, track)
-		/*
+		recordingID := "hardcoded" // TODO: add support
+		status, err := svc.storage.Write(ctxDone, recordingID, track)
+		if err != nil {
+			svc.logger.Error("Error configuring track recording",
+				"kind", track.Kind().String(),
+				"mime-type", track.Codec().MimeType,
+				"reason", err)
+		} else {
 			go func() {
-				codec := track.Codec()
-				if strings.EqualFold(codec.MimeType, webrtc.MimeTypeOpus) {
-					svc.logger.Info("Got Opus track, saving to disk as output.opus (48 kHz, 2 channels)")
-					client.recordAudioTrackOpus(track)
-				} else if strings.EqualFold(codec.MimeType, webrtc.MimeTypeVP8) {
-					svc.logger.Info("Got VP8 track, saving to disk as output.ivf")
-					client.recordVideoTrackVP8(track)
-				} else if strings.EqualFold(codec.MimeType, webrtc.MimeTypeH264) {
-					svc.logger.Info("Got H264 track, saving to disk as output.h264")
-					client.recordVideoTrackH264(track)
+				select {
+				case <-status.Success():
+					svc.logger.Info("Track recorded successfully",
+						"kind", track.Kind().String(),
+						"mime-type", track.Codec().MimeType)
+				case err := <-status.Fail():
+					svc.logger.Error("Track recording failed",
+						"kind", track.Kind().String(),
+						"mime-type", track.Codec().MimeType,
+						"reason", err)
 				}
 			}()
-		*/
+		}
+
 	})
 
 	// Handler - Detect connects, disconnects & closures

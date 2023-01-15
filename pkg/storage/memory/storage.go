@@ -29,6 +29,7 @@ type storageBackend struct {
 	lock    *sync.RWMutex
 }
 
+// New creates a new storage backend instance.
 func New() types.Backend {
 	return &storageBackend{
 		backend: map[string]*internalItem{},
@@ -36,6 +37,7 @@ func New() types.Backend {
 	}
 }
 
+// Configure configures the storage backend.
 func (b *storageBackend) Configure(settings map[string]interface{}, logger hclog.Logger) error {
 	b.logger = logger
 	return nil
