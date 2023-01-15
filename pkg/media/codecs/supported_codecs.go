@@ -3,7 +3,6 @@ package codecs
 import "github.com/pion/webrtc/v3"
 
 const mimeTypeVideoRtx = "video/rtx"
-const enableH264 = true
 
 // AudioCodecs returns a list of audio codecs we support.
 func AudioCodecs() []webrtc.RTPCodecParameters {
@@ -22,7 +21,7 @@ func AudioCodecs() []webrtc.RTPCodecParameters {
 }
 
 // VideoCodecs returns a list of audio codecs we support.
-func VideoCodecs() []webrtc.RTPCodecParameters {
+func VideoCodecs(enableH264 bool) []webrtc.RTPCodecParameters {
 
 	videoRTCPFeedback := []webrtc.RTCPFeedback{
 		{Type: "goog-remb", Parameter: ""},

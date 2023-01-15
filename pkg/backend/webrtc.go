@@ -72,7 +72,7 @@ func CreateNewWebRTCService(webRTCConfig *configs.WebRTCConfig, storage types.Ba
 			return nil, err
 		}
 	}
-	videoCodecs := codecs.VideoCodecs()
+	videoCodecs := codecs.VideoCodecs(webRTCConfig.H264)
 	for _, c := range videoCodecs {
 		if err := svc.mediaEngine.RegisterCodec(c, webrtc.RTPCodecTypeVideo); err != nil {
 			svc.logger.Error("Failed registering audio codec", "reason", err)
@@ -99,41 +99,50 @@ func (svc *WebRTCService) CreateRecordingConnection(client *PeerClient) error {
 
 	ctxDone, ctxDoneCancelFunc := context.WithCancel(context.Background())
 
+	opLogger := svc.logger.With("client-id", client.id)
+
 	var err error
 
 	// Create a new peer connection
 	client.pc, err = svc.api.NewPeerConnection(svc.config)
 	if err != nil {
+		opLogger.Error("Failed creating new peer connection for client", "reason", err)
 		ctxDoneCancelFunc()
 		return err
 	}
 
 	// Allow us to receive 1 audio track, and 1 video track
 	if _, err = client.pc.AddTransceiverFromKind(webrtc.RTPCodecTypeAudio); err != nil {
-		svc.logger.Error("Failed adding transceiver from audio kind", "reason", err)
+		opLogger.Error("Failed adding transceiver from audio kind", "reason", err)
 		ctxDoneCancelFunc()
 		return err
 	} else if _, err = client.pc.AddTransceiverFromKind(webrtc.RTPCodecTypeVideo); err != nil {
-		svc.logger.Error("Failed adding transceiver from video kind", "reason", err)
+		opLogger.Error("Failed adding transceiver from video kind", "reason", err)
 		ctxDoneCancelFunc()
 		return err
 	}
 
 	// Handler - Process audio/video as it is received
 	client.pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
-		svc.logger.Info("Client track ready", "client", client.id, "codec", track.Codec().MimeType)
-		// Send a PLI on an interval so that the publisher is pushing a keyframe every rtcpPLIInterval
 
+		onTrackLogger := opLogger.With("codec", track.Codec().MimeType,
+			"kind", track.Kind(),
+			"payload-type", track.PayloadType())
+
+		onTrackLogger.Info("Client track available")
+
+		// Send a PLI on an interval so that the publisher is pushing a keyframe every rtcpPLIInterval
 		go func() {
 			ticker := time.NewTicker(time.Second * 3)
 			for range ticker.C {
 				select {
 				case <-ctxDone.Done():
+					onTrackLogger.Info("OnTrack PLI regular, client stopped")
 					return
 				default:
 					err := client.pc.WriteRTCP([]rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: uint32(track.SSRC())}})
 					if err != nil {
-						fmt.Printf("OnTrack ticker exiting for client %s (%s)\n", client.id, err)
+						onTrackLogger.Error("OnTrack PLI exiting due to an error", "reason", err)
 						return
 					}
 				}
@@ -143,22 +152,15 @@ func (svc *WebRTCService) CreateRecordingConnection(client *PeerClient) error {
 		recordingID := "hardcoded" // TODO: add support
 		status, err := svc.storage.Write(ctxDone, recordingID, track)
 		if err != nil {
-			svc.logger.Error("Error configuring track recording",
-				"kind", track.Kind().String(),
-				"mime-type", track.Codec().MimeType,
-				"reason", err)
+			onTrackLogger.Error("Error configuring track recording", "reason", err)
+			// TODO: what's the best thing to do here...?
 		} else {
 			go func() {
 				select {
 				case <-status.Success():
-					svc.logger.Info("Track recorded successfully",
-						"kind", track.Kind().String(),
-						"mime-type", track.Codec().MimeType)
+					onTrackLogger.Info("Track recorded successfully")
 				case err := <-status.Fail():
-					svc.logger.Error("Track recording failed",
-						"kind", track.Kind().String(),
-						"mime-type", track.Codec().MimeType,
-						"reason", err)
+					onTrackLogger.Error("Track recording failed", "reason", err)
 				}
 			}()
 		}
@@ -167,20 +169,20 @@ func (svc *WebRTCService) CreateRecordingConnection(client *PeerClient) error {
 
 	// Handler - Detect connects, disconnects & closures
 	client.pc.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
-		svc.logger.Info("Client connection State has changed",
-			"client", client.id,
-			"connection-state", connectionState.String())
 		if connectionState == webrtc.ICEConnectionStateConnected {
-			svc.logger.Info("Client connected to webrtc services as peer", "client", client.id)
+			opLogger.Info("Client connected to webrtc services as peer", "connection-state", connectionState.String())
 		} else if connectionState == webrtc.ICEConnectionStateFailed ||
 			connectionState == webrtc.ICEConnectionStateDisconnected ||
 			connectionState == webrtc.ICEConnectionStateClosed {
-			svc.logger.Info("Client disconnected from webrtc services as peer", "client", client.id)
+			opLogger.Info("Client disconnected from webrtc services as peer", "connection-state", connectionState.String())
+		} else {
+			opLogger.Info("Client connection State has changed", "connection-state", connectionState.String())
 		}
 	})
 
 	go func() {
 		<-client.CloseChan()
+		opLogger.Info("Client claims closed, stopping any ongoing recording")
 		ctxDoneCancelFunc()
 	}()
 

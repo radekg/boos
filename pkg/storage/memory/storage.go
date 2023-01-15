@@ -3,6 +3,7 @@ package memory
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -43,13 +44,20 @@ func (b *storageBackend) Configure(settings map[string]interface{}, logger hclog
 	return nil
 }
 
+// Read reads stored media from this storage backend.
 func (b *storageBackend) Read(ctx context.Context, key string) (types.SamplingReader, error) {
 	return nil, fmt.Errorf("not implemented")
 }
 
-func (b *storageBackend) Write(ctx context.Context, key string, track *webrtc.TrackRemote) (types.WriterDone, error) {
+// Write writes stored media to this storage backend.
+func (b *storageBackend) Write(ctx context.Context, key string, track *webrtc.TrackRemote) (types.WriterStatus, error) {
 
-	opLogger := b.logger.With("key", key)
+	codec := track.Codec()
+
+	opLogger := b.logger.With("key", key,
+		"codec", codec.MimeType,
+		"kind", track.Kind(),
+		"payload-type", track.PayloadType())
 
 	b.lock.Lock()
 	var item *internalItem
@@ -61,23 +69,34 @@ func (b *storageBackend) Write(ctx context.Context, key string, track *webrtc.Tr
 	}
 	b.lock.Unlock()
 
-	codec := track.Codec()
 	switch codec.MimeType {
 	case webrtc.MimeTypeOpus:
 		opLogger.Info("Handling audio track", "mime-type", codec.MimeType)
 		item.audioMimeType = codec.MimeType
 		item.audioBuf = bytes.NewBuffer([]byte{})
-		return recordAudioTrackOpus(ctx, item.videoBuf, track)
+		return recordAudioTrackOpus(ctx, &RecorderSettings{
+			Writer: item.audioBuf,
+			Track:  track,
+			Logger: opLogger,
+		})
 	case webrtc.MimeTypeH264:
 		opLogger.Info("Handling video track", "mime-type", codec.MimeType)
 		item.videoMimeType = codec.MimeType
 		item.videoBuf = bytes.NewBuffer([]byte{})
-		return recordVideoTrackH264(ctx, item.videoBuf, track)
+		return recordVideoTrackH264(ctx, &RecorderSettings{
+			Writer: item.videoBuf,
+			Track:  track,
+			Logger: opLogger,
+		})
 	case webrtc.MimeTypeVP8:
 		opLogger.Info("Handling video track", "mime-type", codec.MimeType)
 		item.videoMimeType = codec.MimeType
 		item.videoBuf = bytes.NewBuffer([]byte{})
-		return recordVideoTrackVP8(ctx, item.videoBuf, track)
+		return recordVideoTrackVP8(ctx, &RecorderSettings{
+			Writer: item.videoBuf,
+			Track:  track,
+			Logger: opLogger,
+		})
 	}
 
 	opLogger.Error("Unsupported mime type", "mime-type", codec.MimeType)
@@ -86,24 +105,37 @@ func (b *storageBackend) Write(ctx context.Context, key string, track *webrtc.Tr
 
 // Consider moving these out into a shared library at some point.
 
-func recordTrack(ctx context.Context, writer media.Writer, track *webrtc.TrackRemote) types.WriterDone {
-	d := newDone()
+// RecorderSettings contains arguments required by the recorder operation.
+type RecorderSettings struct {
+	Writer io.Writer
+	Track  *webrtc.TrackRemote
+	Logger hclog.Logger
+}
+
+func recordTrack(ctx context.Context, mediaWriter media.Writer, settings *RecorderSettings) types.WriterStatus {
+	d := newStatus()
 	go func() {
 		for {
 			select {
 			case <-ctx.Done():
-				writer.Close()
+				settings.Logger.Info("Track finished, reporting success")
+				mediaWriter.Close()
 				d.succeeded()
 				return
 			default:
-				rtpPacket, _, err := track.ReadRTP()
+				rtpPacket, _, err := settings.Track.ReadRTP()
+				if errors.Is(err, io.EOF) {
+					continue
+				}
 				if err != nil {
-					writer.Close()
+					settings.Logger.Error("Failed reading RTP for track", "reason", err)
+					mediaWriter.Close()
 					d.failed(err)
 					return
 				}
-				if err := writer.WriteRTP(rtpPacket); err != nil {
-					writer.Close()
+				if err := mediaWriter.WriteRTP(rtpPacket); err != nil {
+					settings.Logger.Error("Failed writing RTP to media writer for track", "reason", err)
+					mediaWriter.Close()
 					d.failed(err)
 					return
 				}
@@ -113,23 +145,22 @@ func recordTrack(ctx context.Context, writer media.Writer, track *webrtc.TrackRe
 	return d
 }
 
-func recordAudioTrackOpus(ctx context.Context, out io.Writer, track *webrtc.TrackRemote) (types.WriterDone, error) {
-	w, err := oggwriter.NewWith(out, 48000, 2) // TODO: Extract ogg settings
+func recordAudioTrackOpus(ctx context.Context, settings *RecorderSettings) (types.WriterStatus, error) {
+	mediaWriter, err := oggwriter.NewWith(settings.Writer, 48000, 2) // TODO: Extract ogg settings
 	if err != nil {
 		return nil, err
 	}
-	return recordTrack(ctx, w, track), nil
+	return recordTrack(ctx, mediaWriter, settings), nil
 }
 
-func recordVideoTrackH264(ctx context.Context, out io.Writer, track *webrtc.TrackRemote) (types.WriterDone, error) {
-	w := h264writer.NewWith(out)
-	return recordTrack(ctx, w, track), nil
+func recordVideoTrackH264(ctx context.Context, settings *RecorderSettings) (types.WriterStatus, error) {
+	return recordTrack(ctx, h264writer.NewWith(settings.Writer), settings), nil
 }
 
-func recordVideoTrackVP8(ctx context.Context, out io.Writer, track *webrtc.TrackRemote) (types.WriterDone, error) {
-	w, err := ivfwriter.NewWith(out)
+func recordVideoTrackVP8(ctx context.Context, settings *RecorderSettings) (types.WriterStatus, error) {
+	mediaWriter, err := ivfwriter.NewWith(settings.Writer)
 	if err != nil {
 		return nil, err
 	}
-	return recordTrack(ctx, w, track), nil
+	return recordTrack(ctx, mediaWriter, settings), nil
 }

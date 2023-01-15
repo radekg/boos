@@ -69,7 +69,6 @@ func CreateNewPeerClient(conn *websocket.Conn, services *WebRTCService, logger h
 func (c *PeerClient) closed() bool {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
-
 	select {
 	case _, ok := <-c.closeCh:
 		if !ok {
@@ -83,6 +82,7 @@ func (c *PeerClient) closed() bool {
 // Close - closes a client's peer and signal connections.
 func (c *PeerClient) Close() {
 	if c.closed() {
+		c.logger.Warn("Client already closed")
 		return
 	}
 	c.mutex.Lock()
@@ -90,10 +90,14 @@ func (c *PeerClient) Close() {
 	c.mutex.Unlock()
 	c.ws.Close()
 	if c.pc != nil {
-		c.pc.Close()
+		if err := c.pc.Close(); err != nil {
+			c.logger.Warn("Client peer connection closed with error", err)
+		} else {
+			c.logger.Info("Client peer connection closed without error")
+		}
 	}
+	c.logger.Info("Client waiting for event loop to finish")
 	c.wg.Wait()
-
 	c.logger.Info("Client closed")
 }
 
@@ -114,7 +118,7 @@ func (c *PeerClient) eventLoop() {
 
 		err = c.ws.ReadJSON(&ev)
 		if err != nil {
-			c.logger.Error("Client failed reading JSON data from WebSocket", "reason", err)
+			c.logger.Error("Client failed reading JSON data from WebSocket, closing...", "reason", err)
 			go c.Close()
 			return
 		}

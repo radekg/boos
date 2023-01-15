@@ -10,10 +10,12 @@ type WebRTCConfig struct {
 	flagBase
 
 	ICEServers []string
+	H264       bool
 }
 
 // InitFromViper initializes this configuration from viper.
 func (c *WebRTCConfig) InitFromViper(v *viper.Viper) {
+	c.H264 = v.GetBool("h264")
 	c.ICEServers = v.GetStringSlice("ice-servers")
 }
 
@@ -25,6 +27,7 @@ func NewWebRTCConfig() *WebRTCConfig {
 // FlagSet returns an instance of the flag set for the configuration.
 func (c *WebRTCConfig) FlagSet() *pflag.FlagSet {
 	if c.initFlagSet() {
+		c.flagSet.BoolVar(&c.H264, "h264", false, "Use H264")
 		c.flagSet.StringSliceVar(&c.ICEServers, "ice-server", []string{"stun:stun.l.google.com:19302"}, "STUN/TURN server, multiple allowed")
 	}
 	return c.flagSet
