@@ -17,14 +17,16 @@ type SampleWithTimingHint interface {
 
 // SamplingReader reads samples.
 type SamplingReader interface {
-	MimeType() string
+	// MimeType() string
 	NextSample() (SampleWithTimingHint, error)
 }
 
 // Backend represents storage backend.
 type Backend interface {
 	Configure(settings map[string]interface{}, logger hclog.Logger) error
-	Read(ctx context.Context, key string) (SamplingReader, error)
+	AudioMimeType(key string) (mimeType string, hasAudio bool, hasKey bool)
+	VideoMimeType(key string) (mimeType string, hasVideo bool, hasKey bool)
+	Read(ctx context.Context, key, codecType string) (SamplingReader, error)
 	Write(ctx context.Context, key string, track *webrtc.TrackRemote) (WriterStatus, error)
 }
 

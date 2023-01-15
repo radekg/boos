@@ -2,7 +2,9 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -16,10 +18,6 @@ import (
 
 	"github.com/radekg/boos/pkg/media/codecs"
 	"github.com/radekg/boos/pkg/storage/types"
-)
-
-var (
-	oggPageDuration = time.Millisecond * 20
 )
 
 // WebRTCService server implementation
@@ -197,179 +195,162 @@ func (svc *WebRTCService) CreateRecordingConnection(client *PeerClient) error {
 // CreatePlaybackConnection creates a new webrtc peer connection on the server for recording and streaming playback.
 func (svc *WebRTCService) CreatePlaybackConnection(client *PeerClient) error {
 
+	iceConnectedCtx, iceConnectedCtxCancel := context.WithCancel(context.Background())
+
 	var err error
 	client.pc, err = svc.api.NewPeerConnection(svc.config)
 	if err != nil {
+		iceConnectedCtxCancel()
 		return err
 	}
 
-	/* TODO: restore the whole thing
+	recordingID := "hardcoded" // TODO: add support
+	audioMimeType, hasAudio, hasKey := svc.storage.AudioMimeType(recordingID)
+	videoMimeType, hasVideo, hasKey := svc.storage.AudioMimeType(recordingID)
 
-	iceConnectedCtx, iceConnectedCtxCancel := context.WithCancel(context.Background())
+	if !hasKey {
+		iceConnectedCtxCancel()
+		return fmt.Errorf("no recording: %s", recordingID)
+	}
 
-	for id, avr := range svc.recordings {
-		hasVideo := avr.video != nil && avr.video.Len() > 0
-		hasAudio := avr.audio != nil && avr.video.Len() > 0
-
-		if hasVideo {
-
-			svc.logger.Info("I have an AV data", "data-id", id, "video-length", avr.video.Len())
-
-			// Create a video track
-			videoTrack, videoTrackErr := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264}, "video", "pion")
-			if videoTrackErr != nil {
-				panic(videoTrackErr)
-			}
-			rtpSender, videoTrackErr := client.pc.AddTrack(videoTrack)
-			if videoTrackErr != nil {
-				panic(videoTrackErr)
-			}
-
-			go func() {
-				rtcpBuf := make([]byte, 1500)
-				for {
-					if _, _, rtcpErr := rtpSender.Read(rtcpBuf); rtcpErr != nil {
-						return
-					}
-				}
-			}()
-
-			go func() {
-				samplingReader, err := video.GetReader(bytes.NewReader(avr.video.Bytes()), svc.logger.Named("video-reader"))
-				if err != nil {
-					panic(err)
-				}
-				// Wait for connection established
-				<-iceConnectedCtx.Done()
-				// Send frames:
-				for {
-					sampleAndTimingHint, err := samplingReader.NextSample()
-					if err != nil {
-						if errors.Is(err, io.EOF) {
-							fmt.Printf("All video frames parsed and sent")
-							break
-						}
-						panic(err)
-					}
-					if sampleWriteError := videoTrack.WriteSample(sampleAndTimingHint.Sample); sampleWriteError != nil {
-						panic(sampleWriteError)
-					}
-					if sampleAndTimingHint.TimingHint > 0 {
-						// Okay, what I'm seeing ts that various input devices send various frame rates.
-						// What's even more interesting, for an Apple Screen camera, I see variable number of frames
-						// in every second of a stream.
-						// Because of that, I assume that the only correct way to recreate the pace of the video
-						// is to calculate the exact difference between frames in milliseconds.
-						// Basically, there's no such thing as fps, it's maximum fps.
-						<-time.After(sampleAndTimingHint.TimingHint)
-					}
-				}
-			}()
+	if hasAudio {
+		// Create a audio track
+		audioTrack, audioTrackErr := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: audioMimeType}, "audio", "pion")
+		if audioTrackErr != nil {
+			// TODO: what do I do with this...?
 		}
 
-		if hasAudio {
+		rtpSender, audioTrackErr := client.pc.AddTrack(audioTrack)
+		if audioTrackErr != nil {
+			// TODO: what do I do with this...?
+		}
 
-			svc.logger.Info("I have an AV data", "data-id", id, "audio-length", avr.audio.Len())
-
-			// Create a audio track
-			audioTrack, audioTrackErr := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus}, "audio", "pion")
-			if audioTrackErr != nil {
-				panic(audioTrackErr)
-			}
-
-			rtpSender, audioTrackErr := client.pc.AddTrack(audioTrack)
-			if audioTrackErr != nil {
-				panic(audioTrackErr)
-			}
-
-			// Read incoming RTCP packets
-			// Before these packets are returned they are processed by interceptors. For things
-			// like NACK this needs to be called.
-			go func() {
-				rtcpBuf := make([]byte, 1500)
-				for {
-					if _, _, rtcpErr := rtpSender.Read(rtcpBuf); rtcpErr != nil {
-						return
-					}
+		// Read incoming RTCP packets
+		// Before these packets are returned they are processed by interceptors. For things
+		// like NACK this needs to be called.
+		go func() {
+			rtcpBuf := make([]byte, 1500)
+			for {
+				if _, _, rtcpErr := rtpSender.Read(rtcpBuf); rtcpErr != nil {
+					return
 				}
-			}()
+			}
+		}()
 
-			go func() {
-				// Open on oggfile in non-checksum mode.
-				ogg, _, oggErr := oggreader.NewWith(bytes.NewReader(avr.audio.Bytes()))
-				if oggErr != nil {
-					panic(oggErr)
-				}
-
-				// Wait for connection established
-				<-iceConnectedCtx.Done()
-
-				// Keep track of last granule, the difference is the amount of samples in the buffer
-				var lastGranule uint64
-
-				// It is important to use a time.Ticker instead of time.Sleep because
-				// * avoids accumulating skew, just calling time.Sleep didn't compensate for the time spent parsing the data
-				// * works around latency issues with Sleep (see https://github.com/golang/go/issues/44343)
-				ticker := time.NewTicker(oggPageDuration)
-				for ; true; <-ticker.C {
-					pageData, pageHeader, oggErr := ogg.ParseNextPage()
-					if errors.Is(oggErr, io.EOF) {
-						svc.logger.Info("All audio pages parsed and sent")
-						ticker.Stop()
+		go func() {
+			audioSamplingReader, err := svc.storage.Read(context.TODO(), recordingID, audioMimeType)
+			if err != nil {
+				// TODO: what do I do with this...?
+			}
+			// Wait for connection established
+			<-iceConnectedCtx.Done()
+			// Send frames:
+			for {
+				sampleAndTimingHint, err := audioSamplingReader.NextSample()
+				if err != nil {
+					if errors.Is(err, io.EOF) {
+						fmt.Printf("All audio frames parsed and sent")
 						break
 					}
-
-					if oggErr != nil {
-						svc.logger.Error("Ogg error", "reason", oggErr.Error())
-						continue
-					}
-
-					// The amount of samples is the difference between the last and current timestamp
-					sampleCount := float64(pageHeader.GranulePosition - lastGranule)
-					lastGranule = pageHeader.GranulePosition
-					sampleDuration := time.Duration((sampleCount/48000)*1000) * time.Millisecond
-
-					if oggErr = audioTrack.WriteSample(media.Sample{Data: pageData, Duration: sampleDuration}); oggErr != nil {
-						panic(oggErr)
-					}
+					// TODO: what do I do with the error?
 				}
-			}()
+				if sampleWriteError := audioTrack.WriteSample(sampleAndTimingHint.Sample()); sampleWriteError != nil {
+					panic(sampleWriteError)
+				}
+				if sampleAndTimingHint.TimingHint() > 0 {
+					// Okay, what I'm seeing ts that various input devices send various frame rates.
+					// What's even more interesting, for an Apple Screen camera, I see variable number of frames
+					// in every second of a stream.
+					// Because of that, I assume that the only correct way to recreate the pace of the video
+					// is to calculate the exact difference between frames in milliseconds.
+					// Basically, there's no such thing as fps, it's maximum fps.
+					<-time.After(sampleAndTimingHint.TimingHint())
+				}
+			}
+		}()
+	} // end hasAudio
+
+	if hasVideo {
+		// Create a video track
+		videoTrack, videoTrackErr := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: videoMimeType}, "video", "pion")
+		if videoTrackErr != nil {
+			// TODO: what do I do with this...?
+		}
+		rtpSender, videoTrackErr := client.pc.AddTrack(videoTrack)
+		if videoTrackErr != nil {
+			// TODO: what do I do with this...?
 		}
 
-		// Set the handler for ICE connection state
-		// This will notify you when the peer has connected/disconnected
-
-		client.pc.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
-			svc.logger.Info("Connection state has changed", "new-state", connectionState.String())
-			if connectionState == webrtc.ICEConnectionStateConnected {
-				iceConnectedCtxCancel()
+		go func() {
+			rtcpBuf := make([]byte, 1500)
+			for {
+				if _, _, rtcpErr := rtpSender.Read(rtcpBuf); rtcpErr != nil {
+					return
+				}
 			}
-		})
+		}()
 
-		// Set the handler for Peer connection state
-		// This will notify you when the peer has connected/disconnected
-		client.pc.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
-			svc.logger.Info("Peer Connection state has changed", "new-state", s.String())
-
-			if s == webrtc.PeerConnectionStateFailed {
-				// Wait until PeerConnection has had no network activity for 30 seconds or another failure. It may be reconnected using an ICE Restart.
-				// Use webrtc.PeerConnectionStateDisconnected if you are interested in detecting faster timeout.
-				// Note that the PeerConnection may come back from PeerConnectionStateDisconnected.
-				svc.logger.Error("Peer Connection has gone to failed")
-				//os.Exit(0)
+		go func() {
+			samplingReader, err := svc.storage.Read(context.TODO(), recordingID, videoMimeType)
+			if err != nil {
+				panic(err)
 			}
-		})
+			// Wait for connection established
+			<-iceConnectedCtx.Done()
+			// Send frames:
+			for {
+				sampleAndTimingHint, err := samplingReader.NextSample()
+				if err != nil {
+					if errors.Is(err, io.EOF) {
+						fmt.Printf("All video frames parsed and sent")
+						break
+					}
+					panic(err)
+				}
+				if sampleWriteError := videoTrack.WriteSample(sampleAndTimingHint.Sample()); sampleWriteError != nil {
+					panic(sampleWriteError)
+				}
+				if sampleAndTimingHint.TimingHint() > 0 {
+					// Okay, what I'm seeing ts that various input devices send various frame rates.
+					// What's even more interesting, for an Apple Screen camera, I see variable number of frames
+					// in every second of a stream.
+					// Because of that, I assume that the only correct way to recreate the pace of the video
+					// is to calculate the exact difference between frames in milliseconds.
+					// Basically, there's no such thing as fps, it's maximum fps.
+					<-time.After(sampleAndTimingHint.TimingHint())
+				}
+			}
+		}()
+	} // end hasVideo
 
-		// TODO: screw that ... play first one only for now....
-		break
+	// Set the handler for ICE connection state
+	// This will notify you when the peer has connected/disconnected
 
-	}
+	client.pc.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
+		svc.logger.Info("Connection state has changed", "new-state", connectionState.String())
+		if connectionState == webrtc.ICEConnectionStateConnected {
+			iceConnectedCtxCancel()
+		}
+	})
+
+	// Set the handler for Peer connection state
+	// This will notify you when the peer has connected/disconnected
+	client.pc.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
+		svc.logger.Info("Peer Connection state has changed", "new-state", s.String())
+
+		if s == webrtc.PeerConnectionStateFailed {
+			// Wait until PeerConnection has had no network activity for 30 seconds or another failure. It may be reconnected using an ICE Restart.
+			// Use webrtc.PeerConnectionStateDisconnected if you are interested in detecting faster timeout.
+			// Note that the PeerConnection may come back from PeerConnectionStateDisconnected.
+			svc.logger.Error("Peer Connection has gone to failed")
+			//os.Exit(0)
+		}
+	})
 
 	err = client.startServerSession()
 	if err != nil {
 		return err
 	}
-	*/
 
 	return nil // TODO: fix context leak...
 }
