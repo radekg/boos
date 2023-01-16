@@ -55,34 +55,6 @@ func (impl *storageBackend) Contains(key string) bool {
 	return ok
 }
 
-/*
-func (impl *storageBackend) AudioMimeType(key string) (string, bool, bool) {
-	impl.lock.RLock()
-	defer impl.lock.RUnlock()
-	item, ok := impl.backend[key]
-	if !ok {
-		return "", false, ok
-	}
-	if item.audioBuf == nil {
-		return "", false, true
-	}
-	return item.audioMimeType, true, true
-}
-
-func (impl *storageBackend) VideoMimeType(key string) (string, bool, bool) {
-	impl.lock.RLock()
-	defer impl.lock.RUnlock()
-	item, ok := impl.backend[key]
-	if !ok {
-		return "", false, ok
-	}
-	if item.videoBuf == nil {
-		return "", false, true
-	}
-	return item.videoMimeType, true, true
-}
-*/
-
 func (b *storageBackend) Audio(key string) (types.ReaderStatus, error) {
 	b.lock.RLock()
 	item, ok := b.backend[key]
@@ -138,30 +110,6 @@ func (b *storageBackend) Video(key string) (types.ReaderStatus, error) {
 		}
 	}
 	return result, nil
-}
-
-// Read reads stored media from this storage backend.
-func (b *storageBackend) Read(ctx context.Context, key, codecType string) (types.SamplingReader, error) {
-	b.lock.RLock()
-	item, ok := b.backend[key]
-	b.lock.RUnlock()
-	if !ok {
-		return nil, fmt.Errorf("not found: key %s", key)
-	}
-	if item.audioMimeType == codecType {
-		switch codecType {
-		case webrtc.MimeTypeOpus:
-			return newOpusSamplingReader(bytes.NewReader(item.audioBuf.Bytes()), b.logger.Named("ogg-reader"))
-		}
-	} else if item.videoMimeType == codecType {
-		switch codecType {
-		case webrtc.MimeTypeH264:
-			return newH264SamplingReader(item.videoBuf, b.logger.Named("h264-reader"))
-		case webrtc.MimeTypeVP8:
-			return newVP8SamplingReader(item.videoBuf, b.logger.Named("vp8-reader"))
-		}
-	}
-	return nil, fmt.Errorf("not found: codec %s for key %s", codecType, key)
 }
 
 // Write writes stored media to this storage backend.
