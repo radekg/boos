@@ -24,10 +24,16 @@ type SamplingReader interface {
 // Backend represents storage backend.
 type Backend interface {
 	Configure(settings map[string]interface{}, logger hclog.Logger) error
-	AudioMimeType(key string) (mimeType string, hasAudio bool, hasKey bool)
-	VideoMimeType(key string) (mimeType string, hasVideo bool, hasKey bool)
-	Read(ctx context.Context, key, codecType string) (SamplingReader, error)
+	Contains(key string) bool
+	Audio(key string) (ReaderStatus, error)
+	Video(key string) (ReaderStatus, error)
 	Write(ctx context.Context, key string, track *webrtc.TrackRemote) (WriterStatus, error)
+}
+
+type ReaderStatus interface {
+	HasData() bool
+	MimeType() string
+	Reader() SamplingReader
 }
 
 // WriterStatus contains a status of a track write operation.

@@ -48,6 +48,14 @@ func (b *storageBackend) Configure(settings map[string]interface{}, logger hclog
 	return nil
 }
 
+func (impl *storageBackend) Contains(key string) bool {
+	impl.lock.RLock()
+	defer impl.lock.RUnlock()
+	_, ok := impl.backend[key]
+	return ok
+}
+
+/*
 func (impl *storageBackend) AudioMimeType(key string) (string, bool, bool) {
 	impl.lock.RLock()
 	defer impl.lock.RUnlock()
@@ -72,6 +80,64 @@ func (impl *storageBackend) VideoMimeType(key string) (string, bool, bool) {
 		return "", false, true
 	}
 	return item.videoMimeType, true, true
+}
+*/
+
+func (b *storageBackend) Audio(key string) (types.ReaderStatus, error) {
+	b.lock.RLock()
+	item, ok := b.backend[key]
+	b.lock.RUnlock()
+	result := &readerStatus{}
+	if ok {
+		result.hasData = item.audioBuf != nil
+		if result.hasData {
+			result.mimeType = item.audioMimeType
+			switch result.mimeType {
+			case webrtc.MimeTypeOpus:
+				reader, err := newOpusSamplingReader(bytes.NewReader(item.audioBuf.Bytes()), b.logger.Named("ogg-reader"))
+				if err != nil {
+					return nil, err
+				}
+				result.reader = reader
+				return result, nil
+			default:
+				return nil, fmt.Errorf("Invalid mime type: audio '%s' for key '%s'", item.audioMimeType, key)
+			}
+		}
+	}
+	return result, nil
+}
+
+func (b *storageBackend) Video(key string) (types.ReaderStatus, error) {
+	b.lock.RLock()
+	item, ok := b.backend[key]
+	b.lock.RUnlock()
+	result := &readerStatus{}
+	if ok {
+		result.hasData = item.videoBuf != nil
+		if result.hasData {
+			result.mimeType = item.videoMimeType
+			switch result.mimeType {
+			case webrtc.MimeTypeH264:
+				reader, err := newH264SamplingReader(item.videoBuf, b.logger.Named("h264-reader"))
+				if err != nil {
+					return nil, err
+				}
+				result.reader = reader
+				return result, nil
+			case webrtc.MimeTypeVP8:
+				reader, err := newVP8SamplingReader(item.videoBuf, b.logger.Named("vp8-reader"))
+				if err != nil {
+					return nil, err
+				}
+				result.reader = reader
+				return result, nil
+			default:
+				return nil, fmt.Errorf("Invalid mime type: audio '%s' for key '%s'", item.audioMimeType, key)
+			}
+		}
+	}
+	return result, nil
 }
 
 // Read reads stored media from this storage backend.
@@ -157,6 +223,24 @@ func (b *storageBackend) Write(ctx context.Context, key string, track *webrtc.Tr
 // =======================
 // Playback functionality:
 // =======================
+
+type readerStatus struct {
+	hasData  bool
+	mimeType string
+	reader   types.SamplingReader
+}
+
+func (v *readerStatus) HasData() bool {
+	return v.hasData
+}
+
+func (v *readerStatus) MimeType() string {
+	return v.mimeType
+}
+
+func (v *readerStatus) Reader() types.SamplingReader {
+	return v.reader
+}
 
 type sampleWithTimingHint struct {
 	sample     media.Sample
