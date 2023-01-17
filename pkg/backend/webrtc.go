@@ -120,6 +120,14 @@ func (svc *WebRTCService) CreateRecordingConnection(client *PeerClient) error {
 		return err
 	}
 
+	recordingID := "hardcoded" // TODO: add support
+	mediaContainerWriter, err := svc.storage.MediaContainerWriterForBucket(recordingID)
+	if err != nil {
+		opLogger.Error("Failed creating media container writer", "reason", err)
+		ctxDoneCancelFunc()
+		return err
+	}
+
 	// Handler - Process audio/video as it is received
 	client.pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
 
@@ -147,8 +155,7 @@ func (svc *WebRTCService) CreateRecordingConnection(client *PeerClient) error {
 			}
 		}()
 
-		recordingID := "hardcoded" // TODO: add support
-		status, err := svc.storage.Write(ctxDone, recordingID, track)
+		status, err := mediaContainerWriter.Write(ctxDone, recordingID, track)
 		if err != nil {
 			onTrackLogger.Error("Error configuring track recording", "reason", err)
 			// TODO: what's the best thing to do here...?
@@ -209,20 +216,39 @@ func (svc *WebRTCService) CreatePlaybackConnection(client *PeerClient) error {
 
 	recordingID := "hardcoded" // TODO: add support
 
-	if !svc.storage.Contains(recordingID) {
+	if !svc.storage.ContainsBucket(recordingID) {
 		opLogger.Error("No recording for key", "key", recordingID)
 		iceConnectedCtxCancel()
 		return fmt.Errorf("no recording: %s", recordingID)
 	}
 
-	audioStatus, err := svc.storage.Audio(recordingID)
+	mediaReader, err := svc.storage.MediaContainerReaderForBucket(recordingID)
+	if err != nil {
+		opLogger.Error("Failed creating media container reader for key", "key", recordingID, "reason", err)
+		iceConnectedCtxCancel()
+		return fmt.Errorf("no reader for media: %s", recordingID)
+	}
+
+	mediaContainer, err := mediaReader.NextContainer()
+	if mediaContainer == nil || errors.Is(err, io.EOF) {
+		opLogger.Error("No media to deliver for key", "key", recordingID)
+		iceConnectedCtxCancel()
+		return fmt.Errorf("no reader for media: %s", recordingID)
+	}
+	if err != nil {
+		opLogger.Error("Error fetching first media container", "key", recordingID, "reason", err)
+		iceConnectedCtxCancel()
+		return fmt.Errorf("no reader for media: %s", recordingID)
+	}
+
+	audioStatus, err := mediaContainer.Audio(recordingID)
 	if err != nil {
 		opLogger.Error("Failed checking audio status", "reason", err)
 		iceConnectedCtxCancel()
 		return fmt.Errorf("recording error: audio %s", recordingID)
 	}
 
-	videoStatus, err := svc.storage.Video(recordingID)
+	videoStatus, err := mediaContainer.Video(recordingID)
 	if err != nil {
 		opLogger.Error("Failed checking video status", "reason", err)
 		iceConnectedCtxCancel()

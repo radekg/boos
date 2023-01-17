@@ -24,9 +24,21 @@ type SamplingReader interface {
 // Backend represents storage backend.
 type Backend interface {
 	Configure(settings map[string]interface{}, logger hclog.Logger) error
-	Contains(key string) bool
+	ContainsBucket(key string) bool
+	MediaContainerReaderForBucket(key string) (MediaContainerReader, error)
+	MediaContainerWriterForBucket(key string) (MediaContainerWriter, error)
+}
+
+type MediaContainer interface {
 	Audio(key string) (ReaderStatus, error)
 	Video(key string) (ReaderStatus, error)
+}
+
+type MediaContainerReader interface {
+	NextContainer() (MediaContainer, error)
+}
+
+type MediaContainerWriter interface {
 	Write(ctx context.Context, key string, track *webrtc.TrackRemote) (WriterStatus, error)
 }
 
