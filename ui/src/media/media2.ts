@@ -175,7 +175,7 @@ export class ConnectedPeerClient {
                 if (this.audioTarget !== null) {
                     const $a = this.audioTarget
                     console.log("Received ", ev.streams.length, " audio streams")
-                    //ev.streams.forEach(stream => $a.srcObject = stream)
+                    ev.streams.forEach(stream => $a.srcObject = stream)
                 }
             }
         }

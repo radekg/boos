@@ -11,12 +11,15 @@ type BackendConfig struct {
 
 	BindAddress     string
 	ExternalAddress string
+
+	StorageType string
 }
 
 // InitFromViper initializes this configuration from viper.
 func (c *BackendConfig) InitFromViper(v *viper.Viper) {
 	c.BindAddress = v.GetString("backend-bind-address")
 	c.ExternalAddress = v.GetString("backend-external-address")
+	c.StorageType = v.GetString("storage-type")
 }
 
 // NewBackendConfig returns a new backend configuration.
@@ -29,6 +32,7 @@ func (c *BackendConfig) FlagSet() *pflag.FlagSet {
 	if c.initFlagSet() {
 		c.flagSet.StringVar(&c.BindAddress, "backend-bind-address", "127.0.0.1:8082", "Host-port to bind the backend server on")
 		c.flagSet.StringVar(&c.ExternalAddress, "backend-external-address", "http://localhost:8082", "External address this backend server is reachable at")
+		c.flagSet.StringVar(&c.StorageType, "storage-type", "memory", "Storage type")
 	}
 	return c.flagSet
 }

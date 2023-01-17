@@ -3,7 +3,6 @@ package codecs
 import "github.com/pion/webrtc/v3"
 
 const mimeTypeVideoRtx = "video/rtx"
-const enableH264 = true
 
 // AudioCodecs returns a list of audio codecs we support.
 func AudioCodecs() []webrtc.RTPCodecParameters {
@@ -22,7 +21,7 @@ func AudioCodecs() []webrtc.RTPCodecParameters {
 }
 
 // VideoCodecs returns a list of audio codecs we support.
-func VideoCodecs() []webrtc.RTPCodecParameters {
+func VideoCodecs(enableH264 bool) []webrtc.RTPCodecParameters {
 
 	videoRTCPFeedback := []webrtc.RTCPFeedback{
 		{Type: "goog-remb", Parameter: ""},
@@ -70,27 +69,27 @@ func VideoCodecs() []webrtc.RTPCodecParameters {
 				},
 				PayloadType: 127,
 			},
-
-			{
-				RTPCodecCapability: webrtc.RTPCodecCapability{
-					MimeType:     webrtc.MimeTypeH264,
-					ClockRate:    90000,
-					Channels:     0,
-					SDPFmtpLine:  "profile-level-id=42e01f;level-asymmetry-allowed=1;packetization-mode=1",
-					RTCPFeedback: videoRTCPH264Feedback,
+			/*
+				{
+					RTPCodecCapability: webrtc.RTPCodecCapability{
+						MimeType:     webrtc.MimeTypeH264,
+						ClockRate:    90000,
+						Channels:     0,
+						SDPFmtpLine:  "profile-level-id=42e01f;level-asymmetry-allowed=1;packetization-mode=1",
+						RTCPFeedback: videoRTCPH264Feedback,
+					},
+					PayloadType: 98,
 				},
-				PayloadType: 98,
-			},
-			{
-				RTPCodecCapability: webrtc.RTPCodecCapability{
-					MimeType:     mimeTypeVideoRtx,
-					ClockRate:    90000,
-					Channels:     0,
-					SDPFmtpLine:  "apt=98",
-					RTCPFeedback: nil,
-				},
-				PayloadType: 99,
-			},
+				{
+					RTPCodecCapability: webrtc.RTPCodecCapability{
+						MimeType:     mimeTypeVideoRtx,
+						ClockRate:    90000,
+						Channels:     0,
+						SDPFmtpLine:  "apt=98",
+						RTCPFeedback: nil,
+					},
+					PayloadType: 99,
+				},*/
 		}...)
 	}
 
